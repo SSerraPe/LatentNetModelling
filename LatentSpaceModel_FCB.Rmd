@@ -1,0 +1,697 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Modelo de Espacios Latentes
+
+## Setup
+
+```{r, echo=FALSE, warning=FALSE}
+library('latentnet')
+library('jsonlite')
+library('knitr')
+library('tidyverse')
+library('ggplot2')
+library('patchwork')
+library('networkD3')
+library('igraph')
+library('intergraph')
+library('ggraph')
+library('dplyr')
+```
+
+## Dataset: Possesion
+
+```{r}
+ruta_archivo <- "D:/1. MATAPL ITAM/TESIS  SIAM/LatentNetModelling/Possession.csv"
+
+possession <- read.csv(ruta_archivo)
+possession <- possession |> 
+  select(Player, X.Def.Pen, X.Def.3rd, X.Mid.3rd, X.Att.3rd, X.Att.Pen)
+nombres <- possession$Player
+
+possession_clean <- head(possession, n = nrow(possession) - 7) #Quita 7 para modelo Latente
+possession_clean <- possession_clean |> slice(-1)
+
+nombres <- possession_clean$Player
+
+# Crear una lista de iniciales
+iniciales <- substr(nombres, 1, 1)
+
+# Crear una nueva variable de agrupación
+possession_clean$grupo <- rep(c("Grupo 1", "Grupo 2"),
+                              length.out = nrow(possession_clean))
+
+# Definir colores blaugrana
+color_blaugrana <- c("#005EB8", "#C72430")
+
+## Dataset: Passing
+
+ruta_archivo2 <- "D:/1. MATAPL ITAM/TESIS  SIAM/LatentNetModelling/Passing.csv"
+
+passing <- read.csv(ruta_archivo2)
+passing <- passing |> 
+  select(Player, Prog)
+
+passing_clean <- head(passing, n = nrow(passing) - 7) #Quita 7 para modelo Latente
+passing_clean <- passing_clean |> slice(-1)
+```
+
+## Matriz de Adjacencia
+
+```{r, message = FALSE}
+# Paso 1: Crear martiz de datos
+adjacency_matrix <- possession_clean |> 
+  select(X.Def.Pen, X.Def.3rd, X.Mid.3rd, X.Att.3rd, X.Att.Pen)
+
+# Reemplazar valores inferiores a 0.35 por cero
+adj_mat <- as.data.frame(lapply(adjacency_matrix, 
+                                function(x) ifelse(x < 0.35, 0, x)))
+
+# Paso 2: Crear matriz vacía
+n_players <- nrow(adj_mat)
+A <- matrix(0, n_players, n_players)
+
+# Paso 3: Asignar relaciones
+for (i in 1:(n_players - 1)) {
+  for (j in (i + 1):n_players) {
+    
+    p1 <- adj_mat[i, ]
+    p2 <- adj_mat[j, ]
+    
+    r <- 0
+    
+    for (col in colnames(p1)) {
+      if (p1[[col]] != 0 && p2[[col]] != 0) {
+        
+        maxit <- max(p1[[col]], p2[[col]])
+        p <- (p1[[col]] + p2[[col]])/maxit
+        r <- r + p
+        A[i, j] <- r
+        A[j, i] <- r
+        
+        break
+      }
+    }
+  }
+}
+```
+
+```{r}
+# Paso 1: Crear martiz de datos
+adjacency_matrix <- possession_clean |> 
+  select(X.Def.Pen, X.Def.3rd, X.Mid.3rd, X.Att.3rd, X.Att.Pen)
+
+# Reemplazar valores inferiores a 0.35 por cero
+adj_mat <- as.data.frame(lapply(adjacency_matrix, 
+                                function(x) ifelse(x < 0.35, 0, x)))
+
+# Paso 2: Crear matriz vacía
+n_players <- nrow(adj_mat)
+B <- matrix(0, n_players, n_players)
+
+# Paso 3: Asignar relaciones
+for (i in 1:(n_players - 1)) {
+  for (j in (i + 1):n_players) {
+    
+    p1 <- adj_mat[i, ]
+    p2 <- adj_mat[j, ]
+    
+    r <- 0
+    
+    for (col in colnames(p1)) {
+      if (p1[[col]] != 0 && p2[[col]] != 0) {
+        
+        p <- 1
+        r <- r + p
+        B[i, j] <- r
+        B[j, i] <- r
+        
+        break
+      }
+    }
+  }
+}
+```
+
+## Covariable: Porcentaje de pases completados Cmp.
+
+```{r}
+prog <- passing_clean$Prog
+```
+
+## Red de tipo igraph
+
+```{r}
+g <- igraph::graph_from_adjacency_matrix(adjmatrix = A, 
+                                         mode = "undirected")
+class(g)
+
+```
+
+## Red de tipo network
+
+```{r}
+fcb <- network::as.network.matrix(A)
+class(fcb)
+
+fcb2 <- network::as.network.matrix(B)
+
+set.seed(42)
+plot(g, vertex.size = 2.5*sqrt(prog), 
+     vertex.label = NA, 
+     main = "Estructura en Posesión", 
+     directed = FALSE)
+```
+
+## Ajuste del modelo de distancia clasico
+
+```{r, echo=FALSE, warning=FALSE}
+# Con factores de agrupamiento
+fit <- ergmm(formula = fcb ~ euclidean(d = 2),
+             tofit="mcmc")
+
+fit2 <- ergmm(formula = fcb2 ~ euclidean(d=2, G = 3), 
+              tofit = "mcmc")
+
+```
+
+## Grafos de las simulaciones
+
+```{r}
+like_redf <- simulate(fit2)
+like_redf.par <- attr(like_redf, "ergmm.par")
+
+# Define colores para los nodos
+node_colors <- c("red", "blue", "green")[like_redf.par$Z.K]
+
+# Define el color de las aristas
+edge_color <- "lightgray"
+
+# Establece el tipo de línea para las aristas
+like_redf$edge.lty <- "solid"
+
+# Crea el gráfico con los ajustes deseados
+plot(like_redf, 
+     coord = like_redf.par$Z, 
+     edge.col = edge_color, 
+     vertex.col = node_colors,
+     edge.lwd = 1.5  # Ancho de las aristas
+)
+
+# Extracción de los valores de vertex.names de cada sublista en like_redf$val
+labels <- unlist(lapply(like_redf$val, function(node) node$vertex.names))
+
+# Añade los nombres de los nodos al gráfico usando los identificadores almacenados en vertex.names
+text(like_redf.par$Z, 
+     labels = nombres,
+     pos = 1,  # Posición de las etiquetas (1 = arriba, 2 = derecha, 3 = abajo, 4 = izquierda)
+     cex = 0.8,  # Tamaño del texto
+     col = "black"  # Color del texto
+)
+```
+
+## Convergencia de la Cadena de Markov
+
+```{r}
+# Cadena verosimilitud
+
+x <- c(fit$sample$lpY)
+par(mfrow = c(1,1), mar = c(3,3,1.4,1.4), mgp = c(1.75,.75,0))
+plot(x = 1:length(x), y = x, type = "l", xlab = "Iteración", ylab = "Log-verosimilitud", col = "darkgray", main = "Cadena")
+abline(h = mean(x), col = 4, lty = 2, lwd = 2)
+abline(h = quantile(x, c(0.025,0.975)), col = 2, lty = 3, lwd = 2)
+
+```
+
+## Inferencia sobre el intercepto
+
+```{r}
+# Cadena e histograma beta
+par(mfrow = c(1,2), mar = c(3,3,1.4,1.4), mgp = c(1.75,.75,0))
+x <- c(fit$sample$beta)
+
+# Cadena
+
+plot(x = 1:length(x), y = x, type = "l", 
+     xlab = "Iteración", ylab = expression(beta), 
+     col = "darkgray", 
+     main = "Cadena")
+abline(h = mean(x), col = 4, lty = 2, lwd = 2)
+abline(h = quantile(x, c(0.025,0.975)), col = 2, lty = 3, lwd = 2)
+
+# Histograma
+
+hist(x = x, freq = F, col = "gray90", border = "gray90", 
+     xlab = expression(beta), ylab = "Densidad", 
+     main = "Distr. marginal")
+abline(v = mean(x), col = 4, lty = 2, lwd = 2)
+abline(v = quantile(x, c(0.025,0.975)), col = 2, lty = 3, lwd = 2)
+
+# Media posterior del intercepto
+
+beta_pm <- mean(fit$sample$beta)
+beta_pm
+
+# Probabilidad de interaccion basal
+
+1/(1 + exp(-beta_pm))
+
+```
+
+## Inferencia sobre las posiciones latentes
+
+```{r}
+# Muestras posiciones latentes
+# Transformacion de procrustes
+
+B  <- dim(fit$sample$Z)[1]  # no. de muestras MCMC
+n  <- dim(fit$sample$Z)[2]  # no. vertices
+d  <- dim(fit$sample$Z)[3]  # dimension latente
+
+U0 <- scale(fit$mcmc.mle$Z, T, T)
+U.array <- array(data = NA, dim = c(B,n,d))
+
+for (b in 1:B)
+  U.array[b,,] <- MCMCpack::procrustes(X = scale(fit$sample$Z[b,,], T, T), 
+                                       Xstar = U0, translation = T, 
+                                       dilation = T)$X.new
+U.pm <- apply(X = U.array, MARGIN = c(2, 3), FUN = mean) 
+
+# Colores
+
+rr <- atan2(U0[,2], U0[,1])
+rr <- rr+abs(min(rr))
+rr <- rr/max(rr)
+gg <- 1 - rr
+bb <- U0[,2]^2 + U0[,1]^2
+bb <- bb/max(bb)
+aa <- 0.4
+
+# Grafico adelgazando la cadena cada 8 obs
+
+nthin <- 8
+index_thin <- seq(from = nthin, to = B, by = nthin)
+
+plot(NA, NA, cex.axis = 0.7, 
+     xlab = "Dimension 1", ylab = "Dimension 2", 
+     type = "n", xlim = range(U.array), ylim = range(U.array), 
+     main = "Posiciones latentes")
+
+for (i in 1:n) points(U.array[index_thin,i,1], 
+                      U.array[index_thin,i,2], 
+                      pch = 15, cex = 0.3, 
+                      col = rgb(rr[i], gg[i], bb[i], aa))
+
+for (i in 1:n) text(x = U.pm[i,1], y = U.pm[i,2], 
+                    labels = i, col = 1, cex = 1.1, font = 2)
+
+```
+
+# Posiciones latentes
+
+```{r, warning=FALSE}
+set.seed(42)
+plot(fit, what = "pmean", print.formula = F, 
+     main = "Media post. posiciones latentes")
+
+```
+
+## Inferencia probabilidades de interaccion
+
+```{r}
+# Funcion expit
+expit <- function(x) 1/(1+exp(-x))
+
+# Probabilidades de interaccion (media posterior)
+Pi <- matrix(0, n, n)
+
+for (b in 1:B) {
+  bet <- fit$sample$beta[b]
+  for (i in 1:(n-1)) {
+    for (j in (i+1):n) {
+      lat <- sqrt(sum((fit$sample$Z[b,i,] - fit$sample$Z[b,j,])^2))
+      Pi[i,j] <- Pi[j,i] <- Pi[i,j] + expit(bet - lat)/B
+    }
+  }
+}
+
+diag(Pi) <- 0
+
+rownames(Pi) <- nombres
+colnames(Pi) <- nombres
+
+# Hacer la matriz simétrica
+for (i in 1:nrow(Pi)) {
+  for (j in 1:ncol(Pi)) {
+    if (i != j) {
+      Pi[i, j] <- Pi[j, i]
+    }
+  }
+}
+
+library("RColorBrewer")
+library(gplots)
+
+col <- colorRampPalette(brewer.pal(11, "RdYlBu"))(256)
+
+heatmap(Pi, col = col)
+
+```
+
+```{r}
+library(dendextend)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("ComplexHeatmap")
+library(ComplexHeatmap)
+
+# Genera el vector de colores
+col <- c("#ffffff", "#f1c232", "#990000")
+
+row_dend = hclust(dist(Pi), method = "average") # row clustering
+col_dend = hclust(dist(t(Pi)), method = "average") # column clustering
+
+Heatmap(Pi, name = "Probs", col = col,
+        cluster_rows = color_branches(row_dend, k = 3),
+        cluster_columns = color_branches(col_dend, k = 3), 
+        row_names_gp = gpar(fontsize = 7), 
+        column_names_gp = gpar(fontsize = 7))
+
+```
+
+
+## Bondad de ajuste
+
+```{r}
+# Bondad de ajuste distancia geodesica
+
+fit.gof <- gof(fit, GOF = ~odegree + distance)
+plot(fit.gof)
+
+# Bondad de ajuste
+
+B <- dim(fit$sample$Z)[1]
+n <- dim(fit$sample$Z)[2]
+d <- dim(fit$sample$Z)[3]
+
+stat <- matrix(NA, B, 6)
+
+set.seed(42)
+
+for (b in 1:B) {
+  # intercepto
+  bet <- fit$sample$beta[b]
+  # simular datos
+  Ar  <- matrix(0, n, n)
+  for (i in 1:(n-1)) {
+    for (j in (i+1):n){
+      lat <- sqrt(sum((fit$sample$Z[b,i,] - fit$sample$Z[b,j,])^2))
+      Ar[i,j] <- Ar[j,i] <- rbinom(n = 1, size = 1, prob = expit(bet - lat))
+    }
+  }
+  
+  gr <- igraph::graph_from_adjacency_matrix(adjmatrix = Ar, 
+                                            mode = "undirected")
+  
+  # Calcular estadisticos
+  
+  stat[b,1] <- igraph::edge_density(graph = gr, loops = F)
+  stat[b,2] <- igraph::transitivity(graph = gr, type = "global")
+  stat[b,3] <- igraph::assortativity_degree(graph = gr, directed = F)
+  stat[b,4] <- igraph::mean_distance(graph = gr, directed = F)
+  stat[b,5] <- mean(igraph::degree(graph = gr))
+  stat[b,6] <- sd(igraph::degree(graph = gr))
+}
+
+# Valores observados
+
+dens_obs <- igraph::edge_density(graph = g, loops = F)
+tran_obs <- igraph::transitivity(graph = g, type = "global")
+asso_obs <- igraph::assortativity_degree(graph = g, directed = F)
+mdis_obs <- igraph::mean_distance(graph = g, directed = F)
+mdeg_obs <- mean(igraph::degree(graph = g))
+sdeg_obs <- sd(igraph::degree(graph = g))
+
+# Graficos
+
+par(mfrow = c(2,3))
+
+hist(x = stat[,1], freq = F, col = "gray90", border = "gray90", 
+     xlim = range(stat[,1]), xlab = "Densidad", ylab = "Densidad", 
+     main = "Densidad")
+
+abline(v = dens_obs, col = 4, lty = 2)
+abline(v = quantile(stat[,1], c(0.025, 0.975)), lty = 3, col = 2)
+
+hist(x = stat[,2], freq = F, col = "gray90", border = "gray90", 
+     xlim = range(stat[,2]), xlab = "Transitividad", ylab = "Densidad", 
+     main = "Transitividad")
+abline(v = tran_obs, col = 4, lty = 2)
+abline(v = quantile(stat[,2], c(0.025, 0.975)), lty = 3, col = 2)
+
+hist(x = stat[,3], freq = F, col = "gray90", border = "gray90", 
+     xlim = range(stat[,3]), xlab = "Asortatividad", ylab = "Densidad", 
+     main = "Asortatividad")
+abline(v = asso_obs, col = 4, lty = 2)
+abline(v = quantile(stat[,3], c(0.025, 0.975)), lty = 3, col = 2)
+
+hist(x = stat[,4], freq = F, col = "gray90", border = "gray90", 
+     xlim = range(stat[,4]), xlab = "Distancia prom.", ylab = "Densidad", 
+     main = "Distancia prom.")
+abline(v = mdis_obs, col = 4, lty = 2)
+abline(v = quantile(stat[,4], c(0.025, 0.975)), lty = 3, col = 2)
+
+hist(x = stat[,5], freq = F, col = "gray90", border = "gray90", 
+     xlim = range(stat[,5]), xlab = "Grado prom.", ylab = "Densidad", 
+     main = "Grado prom.")
+abline(v = mdeg_obs, col = 4, lty = 2)
+abline(v = quantile(stat[,5], c(0.025, 0.975)), lty = 3, col = 2)
+
+hist(x = stat[,6], freq = F, col = "gray90", border = "gray90", 
+     xlim = range(stat[,6]), xlab = "Grado DE", ylab = "Densidad", 
+     main = "Grado DE")
+abline(v = sdeg_obs, col = 4, lty = 2)
+abline(v = quantile(stat[,6], c(0.025, 0.975)), lty = 3, col = 2)
+
+# Valores p
+
+round(mean(stat[,1] > dens_obs), 4)
+
+round(mean(stat[,2] > tran_obs), 4)
+
+round(mean(stat[,3] > asso_obs), 4)
+
+round(mean(stat[,4] > mdis_obs), 4)
+
+round(mean(stat[,5] > mdeg_obs), 4)
+
+round(mean(stat[,6] > sdeg_obs), 4)
+
+```
+
+# Predictiva
+
+```{r}
+
+hist(x = stat[,2], freq = F, col = "gray90", border = "gray90", 
+     breaks = 50,  # Puedes ajustar el número de bins cambiando este valor
+     xlim = range(stat[,2]), xlab = "Transitividad", ylab = "Densidad", 
+     main = "Transitividad")
+abline(v = tran_obs, col = 4, lty = 2)
+abline(v = quantile(stat[,2], c(0.025, 0.975)), lty = 3, col = 2)
+
+```
+
+```{r}
+# Cargar la biblioteca ggplot2
+library(ggplot2)
+# Cargar la biblioteca cowplot
+library(cowplot)
+
+# Crear un data frame con los resultados de las métricas
+results_df <- data.frame(
+  Densidad = stat[, 1],
+  Transitividad = stat[, 2],
+  Asortatividad = stat[, 3],
+  DistanciaProm = stat[, 4],
+  GradoProm = stat[, 5],
+  GradoDE = stat[, 6]
+)
+
+# Crear un data frame para los valores observados
+obs_df <- data.frame(
+  Métrica = c("Densidad", "Transitividad", "Asortatividad", "Distancia Promedio", "Grado Promedio", "Grado DE"),
+  ValorObservado = c(dens_obs, tran_obs, asso_obs, mdis_obs, mdeg_obs, sdeg_obs)
+)
+
+# Crear una función para dibujar gráficos de densidad y agregar líneas verticales para los valores observados
+plot_density <- function(metric_name) {
+  p <- ggplot(results_df, aes(x = .data[[metric_name]])) +
+    geom_density(fill = "gray90", color = "gray90") +
+    geom_vline(data = obs_df[obs_df$Métrica == metric_name, ], aes(xintercept = ValorObservado), color = "red", linetype = "dashed") +
+    labs(x = metric_name, y = "Densidad") +
+    theme_minimal()
+  return(p)
+}
+
+# Crear una cuadrícula de gráficos de densidad
+plot_list <- lapply(colnames(results_df), plot_density)
+
+# Organizar los gráficos en una cuadrícula con cowplot
+print(plot_grid(plotlist = plot_list, ncol = 3))
+```
+
+## Modelo de distancia clasico con covariables
+
+### Agrupamiento de clusters
+
+```{r}
+G <- dist(A)
+a <- hclust(G, method = "average")
+b <- hclust(G, method = "complete")
+plot(a, col=c(6))
+rect.hclust(a, 3)
+```
+
+
+### Ajuste del modelo
+
+```{r, echo=FALSE, warning=FALSE}
+x <- abs(outer(X = prog, Y = prog, FUN = "-"))
+
+fit2 <- ergmm(formula = fcb ~ euclidean(d = 2, G = 3) + edgecov(x), seed = 42)
+
+summary(fit2)
+
+```
+
+### Inferencia sobre los coeficientes
+
+```{r}
+# Cadena e histograma beta
+
+par(mfrow = c(1,2), mar = c(3,3,1.4,1.4), mgp = c(1.75,.75,0))
+x <- c(fit2$sample$beta[,2])
+
+# Cadena
+
+plot(x = 1:length(x), y = x, type = "l", 
+     xlab = "Iteración", ylab = expression(beta), 
+     col = "darkgray", main = "Cadena")
+abline(h = mean(x), col = 4, lty = 2, lwd = 2)
+abline(h = quantile(x, c(0.025,0.975)), col = 2, lty = 3, lwd = 2)
+
+# Histograma
+
+hist(x = x, freq = F, col = "gray90", border = "gray90", 
+     xlab = expression(beta), ylab = "Densidad", 
+     main = "Distr. marginal")
+abline(v = mean(x), col = 4, lty = 2, lwd = 2)
+abline(v = quantile(x, c(0.025,0.975)), col = 2, lty = 3, lwd = 2)
+
+# Media posterior del intercepto
+
+beta_pm <- mean(fit2$sample$beta[,2])
+beta_pm
+
+```
+
+## Modelo de Cluster 
+
+
+## Inferencia sobre las posiciones latentes
+
+### Grafico densidad variables latentes
+
+```{r}
+plot(fit2, what = "density")
+```
+
+### Grafico posiciones latentes
+
+```{r, warning=FALSE}
+plot(fit2, what = "pmean", print.formula = F, 
+     main = "Media post. posiciones latentes")
+```
+
+### Grafico posiciones latentes
+
+```{r, warning=FALSE}
+plot(fit2, pie = TRUE, vertex.cex = 2, print.formula = F, 
+     main = "Media post. posiciones latentes")
+```
+
+### Asignacion de los clusters
+
+```{r}
+clusters <- fit2$mcmc.mle$Z.K
+```
+
+## Grafo final
+
+```{r}
+# Definir los colores para cada cluster
+colores <- c("#95d5b2", "#90e0ef", "#f87575")  
+
+plot(g, 
+     vertex.size = 35, 
+     vertex.color = colores[clusters],
+     vertex.label = nombres,
+     vertex.label.color = "black",
+     edge.color = "gray",
+     edge.width = 1,
+     layout = layout_with_fr,
+     main = "Structure in Possession")
+```
+
+## Análisis Táctico ------------------------------------------------------------
+
+```{r}
+# 1. Camino más corto del nodo 13 al nodo 5
+camino_mas_corto <- shortest_paths(g, from = 13, to = 1)$vpath[[1]]
+
+# 2. Grado de cada nodo y los 5 nodos con grado más alto
+grados <- degree(g)
+
+# 3. Densidad del grafo
+densidad <- edge_density(g)
+
+# 4. Centralidad de intermediación de cada vértice y los 5 nodos con mayor centralidad de intermediación
+centralidad_intermediacion <- betweenness(g)
+
+summary <- data.frame(
+  player = nombres,
+  degree = grados,
+  betweeness = centralidad_intermediacion
+)
+```
+
+```{r}
+# Imprimir el data frame
+print(summary)
+print(densidad)
+```
+
+```{r}
+
+# Define la paleta de colores para las aristas
+edge_palette <- colorRampPalette(c("#ffffff", "#000000"))(100)
+
+# Crea el grafo a partir de la matriz de adyacencia Pi
+grafo <- graph_from_adjacency_matrix(Pi, mode = "undirected", weighted = TRUE)
+
+# Define los atributos de los vértices y aristas
+V(grafo)$color <- colores[clusters]
+V(grafo)$size <- 40
+V(grafo)$label <- nombres
+V(grafo)$label.color <- "black"
+
+# Plotea el grafo con las características deseadas
+plot(grafo, 
+     edge.color = edge_palette[cut(Pi, breaks = length(edge_palette) - 1)], 
+     edge.width = E(grafo)$weight, 
+     layout = layout_with_fr(grafo, niter = 500, start.temp = 0.009),
+     main = "Estructura en Posesión")
+
+```
